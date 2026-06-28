@@ -10,3 +10,11 @@ The Primary goal of the Project is to:
 Research Goals:
 
   1. Implement a model that does brediction of next words in batches instead of 1 word at a time.
+
+
+
+Setup:
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt

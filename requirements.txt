@@ -1,0 +1,7 @@
+kagglehub>=0.3.0
+torch>=2.3.0
+numpy>=1.26.0
+jupyter>=1.0.0
+ipykernel>=6.29.0
+matplotlib>=3.9.0
+tqdm>=4.66.0
