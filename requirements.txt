@@ -5,3 +5,4 @@ jupyter>=1.0.0
 ipykernel>=6.29.0
 matplotlib>=3.9.0
 tqdm>=4.66.0
+regex>=2024.11.6
