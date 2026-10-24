@@ -19,7 +19,11 @@ where $X^T$ have all the embeddings vectors as columns.
 
 ## Normalizing attention scores with softmax
 
-The attention scores are normalized into attention weights $\alpha_{2j}$ that are positive and sum to 1. Softmax is preferred over dividing by the plain sum because it keeps every weight positive and gives more weight to larger scores:
+![Figure 2: Normalizing attention scores into attention weights](./document_screenshots/attention_weights_normalization.png)
+
+**Figure 2:** The attention scores $\omega_{2j}$ for the query $x^{(2)}$ are normalized into attention weights $\alpha_{2j}$. *Image credit: Sebastian Raschka, [Build a Large Language Model (From Scratch)](https://www.manning.com/books/build-a-large-language-model-from-scratch), Manning, 2024.*
+
+The attention scores are normalized into attention weights $\alpha_{2j}$ that are positive and sum to 1 (see [Figure 2](#figure-2)). Softmax is preferred over dividing by the plain sum because it keeps every weight positive and gives more weight to larger scores:
 
 $$\alpha_{2j} = \text{softmax}(w_{2j}) = \frac{e^{w_{2j}}}{\sum_{k=1}^{T} e^{w_{2k}}}$$
 
