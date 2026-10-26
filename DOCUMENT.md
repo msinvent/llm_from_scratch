@@ -347,7 +347,7 @@ torch.manual_seed(123)
 mha_context_vecs = MultiHeadAttentionWrapper(d_in, d_out, context_length=6, num_heads=2)(batch)  # (2, 6, 4)
 ```
 
-Each head outputs `d_out` values per token, so the output is $(B, T, \text{num\_heads} \cdot d_{out})$: with 2 heads and $d_{out} = 2$, every token gets a 4-dimensional context vector. The first 2 values come from head 1 and the last 2 from head 2. It works for any batch size and any number of heads.
+Each head outputs `d_out` values per token, so the output is `(B, T, num_heads * d_out)`: with 2 heads and $d_{out} = 2$, every token gets a 4-dimensional context vector. The first 2 values come from head 1 and the last 2 from head 2. It works for any batch size and any number of heads.
 
 The heads run one after another and each does its own three projections, which is easy to read but slow. A combined `MultiHeadAttention` class does all the heads' projections in one matmul and splits them afterwards.
 
@@ -363,7 +363,7 @@ PyTorch ships a ready-made layer, `nn.MultiheadAttention`. It does the Q/K/V pro
 | Output projection | none | `out_proj` |
 | Biases | none | on by default (`bias=False` to remove) |
 
-**Size requirement.** `d_model` is the usual name for the embedding size of each token (PyTorch calls it `embed_dim`). `nn.MultiheadAttention` requires the output size to equal the input size, and $d_{model} = \text{num\_heads} \times \text{head\_dim}$. The sentence `inputs` have $d_{in} = 3$, which can't be split across 2 heads, so the comparison uses a random input with $d_{model} = 4$ = 2 heads × `head_dim` 2:
+**Size requirement.** `d_model` is the usual name for the embedding size of each token (PyTorch calls it `embed_dim`). `nn.MultiheadAttention` requires the output size to equal the input size, and `d_model = num_heads * head_dim`. The sentence `inputs` have $d_{in} = 3$, which can't be split across 2 heads, so the comparison uses a random input with $d_{model} = 4$ = 2 heads × `head_dim` 2:
 
 ```
 x:            (2, 6, 4)    2 sequences × 6 tokens × d_model 4
