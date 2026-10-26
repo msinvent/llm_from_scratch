@@ -2,9 +2,14 @@
 
     python gpt2/train.py --data tinystories --preset stories     # the main 5080 run
     python gpt2/train.py --data verdict --preset tiny             # quick check that everything works
-    python gpt2/train.py --data tinystories --preset stories --resume
+    python gpt2/train.py --data tinystories --preset stories --resume   # continues the latest tinystories-stories run
+
+Each run gets its own folder, runs/<data>-<preset>-<YYYYmmdd-HHMMSS>, with config.json, log.csv, ckpt.pt and
+TensorBoard logs. Compare runs with: tensorboard --logdir runs
 """
 import argparse
+import glob
+import json
 import math
 import os
 import time
@@ -14,6 +19,7 @@ from dataclasses import asdict
 import numpy as np
 import tiktoken
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 from model import GPT, GPTConfig
 
@@ -41,8 +47,8 @@ def parse_args():
     p.add_argument("--eval-batches", type=int, default=20)
     p.add_argument("--log-interval", type=int, default=10)
     p.add_argument("--prompt", default="Once upon a time")
-    p.add_argument("--out-dir", help="default: runs/<data>-<preset>")
-    p.add_argument("--resume", action="store_true", help="continue from <out-dir>/ckpt.pt")
+    p.add_argument("--out-dir", help="default: a new runs/<data>-<preset>-<timestamp>")
+    p.add_argument("--resume", action="store_true", help="continue from <out-dir>/ckpt.pt (default: the latest matching run)")
     p.add_argument("--no-compile", action="store_true", help="skip torch.compile (it is only used on CUDA)")
     p.add_argument("--seed", type=int, default=1337)
     return p.parse_args()
@@ -54,8 +60,18 @@ def main():
     micro_batch = args.micro_batch or preset["micro_batch"]
     lr = args.lr or preset["lr"]
     T = preset["context_length"]
-    out_dir = args.out_dir or os.path.join(RUNS_ROOT, f"{args.data}-{args.preset}")
+    run_prefix = os.path.join(RUNS_ROOT, f"{args.data}-{args.preset}")
+    if args.out_dir:
+        out_dir = args.out_dir
+    elif args.resume:
+        previous = sorted(glob.glob(f"{run_prefix}-[0-9]*-[0-9]*"))  # timestamps sort in time order
+        if not previous:
+            raise SystemExit(f"no run to resume matching {run_prefix}-*; pass --out-dir")
+        out_dir = previous[-1]
+    else:
+        out_dir = f"{run_prefix}-{time.strftime('%Y%m%d-%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
+    print(f"run folder {out_dir}")
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     torch.manual_seed(args.seed)
@@ -121,6 +137,11 @@ def main():
     if not args.resume or not os.path.exists(log_path):
         with open(log_path, "w") as f:
             f.write("step,lr,train_loss,val_loss,tokens_per_sec\n")
+        # Everything that defines the run, so runs can be compared later
+        with open(os.path.join(out_dir, "config.json"), "w") as f:
+            json.dump({"args": vars(args), "preset": preset, "micro_batch": micro_batch, "lr": lr,
+                       "max_steps": max_steps, "n_train_tokens": n_train}, f, indent=2)
+    tb = SummaryWriter(out_dir)  # writes to disk in a background thread
 
     @torch.no_grad()
     def estimate_loss() -> dict[str, float]:
@@ -141,6 +162,8 @@ def main():
         print(f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         with open(log_path, "a") as f:
             f.write(f"{step},,{losses['train']:.4f},{losses['val']:.4f},\n")
+        tb.add_scalar("loss/val", losses["val"], step)
+        tb.add_scalar("loss/train_eval", losses["train"], step)
         prompt = torch.tensor([enc.encode(args.prompt)], device=device)
         raw_model.eval()
         sample = raw_model.generate(prompt, max_new_tokens=100, n_vocab=enc.n_vocab)
@@ -179,9 +202,13 @@ def main():
                   f"grad norm {grad_norm:.2f} | {dt * 1000:.0f} ms/step | {tok_per_sec:,.0f} tok/s")
             with open(log_path, "a") as f:
                 f.write(f"{step},{get_lr(step - 1):.6e},{loss_val:.4f},,{tok_per_sec:.0f}\n")
+            tb.add_scalar("loss/train_step", loss_val, step)
+            tb.add_scalar("lr", get_lr(step - 1), step)
+            tb.add_scalar("tokens_per_sec", tok_per_sec, step)
             t0 = time.time()
 
     evaluate_and_save()
+    tb.close()
 
 
 if __name__ == "__main__":

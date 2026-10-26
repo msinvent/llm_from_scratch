@@ -6,7 +6,7 @@ A GPT-2 style model trained from scratch, built from the same pieces as `attenti
 |---|---|
 | `model.py` | The model: `MultiHeadAttention`, `FeedForward`, `TransformerBlock`, `GPT` |
 | `prepare_data.py` | Downloads a dataset and tokenizes it into `data/<name>/train.bin` and `val.bin` |
-| `train.py` | Trains the model, evaluates every 250 steps, saves `runs/<data>-<preset>/ckpt.pt` and `log.csv` |
+| `train.py` | Trains the model, evaluates every 250 steps, saves `config.json`, `log.csv`, `ckpt.pt` and TensorBoard logs in a new `runs/<data>-<preset>-<timestamp>/` |
 | `sample.py` | Generates text from a checkpoint |
 
 ## Model sizes (`--preset`)
@@ -56,11 +56,56 @@ mkdir -p runs
 tmux new -s train "source .venv/bin/activate && python gpt2/train.py --data tinystories --preset stories 2>&1 | tee runs/train.log"
 
 # 4. Generate text
-python gpt2/sample.py runs/tinystories-stories/ckpt.pt --prompt "Once upon a time"
-python gpt2/sample.py runs/tinystories-stories/ckpt.pt --prompt "Lily went to the park with her mom and dog" --max-new-words 10 --top-k 50 --temperature 0.8
+# (use your run's folder name, e.g. runs/tinystories-stories-20261026-020147)
+python gpt2/sample.py runs/tinystories-stories-<timestamp>/ckpt.pt --prompt "Once upon a time"
+python gpt2/sample.py runs/tinystories-stories-<timestamp>/ckpt.pt --prompt "Lily went to the park with her mom and dog" --max-new-words 10 --top-k 50 --temperature 0.8
 ```
 
-The training command runs inside `tmux` so it keeps going if the terminal closes. Detach with `Ctrl-b d`, reattach with `tmux attach -t train`, or follow the output from anywhere with `tail -f runs/train.log`. The tmux session closes when training ends, but the full output stays in `runs/train.log`. If a run stops, launch it again with `--resume` to continue from the last checkpoint (and `tee -a` so the log is appended to, not overwritten).
+The training command runs inside `tmux` so it keeps going if the terminal closes. Detach with `Ctrl-b d`, reattach with `tmux attach -t train`, or follow the output from anywhere with `tail -f runs/train.log`. The tmux session closes when training ends, but the full console output stays in `runs/train.log` (overwritten by the next launch; the numbers that matter are also in the run's own `log.csv`). If a run stops, launch it again with `--resume` to continue the latest run of that data and preset from its last checkpoint (and `tee -a` so the console log is appended to, not overwritten).
+
+## Tracking and comparing runs
+
+Every run gets its own folder, so runs never overwrite each other:
+
+```
+runs/tinystories-stories-20261026-020147/
+  config.json   # all settings of the run: command-line args, preset, learning rate, number of steps
+  log.csv       # step, lr, train_loss, val_loss, tokens_per_sec
+  ckpt.pt       # model and optimizer, saved at every evaluation
+  events.out.tfevents.*   # the same numbers for TensorBoard
+```
+
+`log.csv` has two kinds of rows. Every 10 steps (`--log-interval`): the loss of that step's batch, the learning rate and the speed, with `val_loss` empty. Every 250 steps (`--eval-interval`): train and val loss each averaged over 20 batches (`--eval-batches`), with `lr` empty.
+
+To see and compare the curves, start TensorBoard in a second terminal (it can stay open while training runs and picks up new points and new runs by itself):
+
+```bash
+source .venv/bin/activate
+tensorboard --logdir runs        # then open http://localhost:6006 in your Windows browser
+```
+
+| Chart | What it is |
+|---|---|
+| `loss/train_step` | loss of the training batch, every 10 steps (noisy; use the Smoothing slider) |
+| `loss/train_eval`, `loss/val` | train and val loss averaged over 20 batches, every 250 steps |
+| `lr` | learning rate: linear warmup, then cosine decay |
+| `tokens_per_sec` | training speed |
+
+The charts update live, 10 to 60 seconds behind the terminal: `train.py` writes to disk every ~40 steps, TensorBoard checks for new data every 5 seconds, and the page refreshes every 30 seconds (click ⟳ at the top right to refresh now). Val points only appear every 250 steps, when an evaluation runs.
+
+Each run folder shows up as its own run, including new ones started while TensorBoard is open; tick runs on and off in the left panel to compare them.
+
+To look at only some runs, type a regular expression in the **Filter runs** box in the left panel, e.g. `tinystories-stories-.*` for all TinyStories runs or `verdict-tiny-20261026-.*` for the verdict runs of one day. Runs started later that match the filter show up too.
+
+`--logdir` does not accept a wildcard. To load only the folders matching a pattern, let the shell expand it into `--logdir_spec`, which takes a comma-separated list of folders:
+
+```bash
+tensorboard --logdir_spec $(ls -d runs/tinystories-stories-* | paste -sd, -)
+```
+
+The pattern is expanded once, at startup, so a matching run started later needs a TensorBoard restart. `--logdir_spec` is marked experimental, so prefer the filter box. A val loss that flattens or rises while the train loss keeps falling means the model is overfitting.
+
+To test a change, run the same command with one setting changed (e.g. `--lr 5e-4`) and compare the two runs; `config.json` records what differed.
 
 ## What to expect
 
