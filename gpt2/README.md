@@ -53,7 +53,7 @@ python gpt2/train.py --data tinystories --preset stories --max-steps 2   # smoke
 
 # 3. Train (one pass over the data = 3,616 steps of 131k tokens), inside a tmux session named "train"
 mkdir -p runs
-tmux new -s train "source .venv/bin/activate && python gpt2/train.py --data tinystories --preset stories 2>&1 | tee runs/train.log"
+tmux new -s train "source .venv/bin/activate && python -u gpt2/train.py --data tinystories --preset stories 2>&1 | tee runs/train.log"
 
 # 4. Generate text
 # (use your run's folder name, e.g. runs/tinystories-stories-20261026-020147)

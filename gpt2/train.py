@@ -12,6 +12,7 @@ import glob
 import json
 import math
 import os
+import sys
 import time
 from contextlib import nullcontext
 from dataclasses import asdict
@@ -55,6 +56,7 @@ def parse_args():
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # print each line right away, even when piped into tee
     args = parse_args()
     preset = PRESETS[args.preset]
     micro_batch = args.micro_batch or preset["micro_batch"]
@@ -168,7 +170,9 @@ def main():
         raw_model.eval()
         sample = raw_model.generate(prompt, max_new_tokens=100, n_vocab=enc.n_vocab)
         raw_model.train()
-        print("sample:", enc.decode(sample[0].tolist()).replace("\n", " "))
+        text = enc.decode(sample[0].tolist())
+        print("sample:", text.replace("\n", " "))
+        tb.add_text("sample", text, step)
         if step > 0:
             torch.save({"model": raw_model.state_dict(), "optimizer": optimizer.state_dict(), "step": step,
                         "config": asdict(cfg), "args": vars(args), "val_loss": losses["val"]}, ckpt_path)
