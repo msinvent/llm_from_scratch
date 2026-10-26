@@ -114,8 +114,53 @@ To test a change, run the same command with one setting changed (e.g. `--lr 5e-4
 
 - The loss starts at about 10.8, which is $\ln(50304)$: a model that guesses uniformly over the vocabulary.
 - On TinyStories, samples become readable English after a few hundred steps, and the validation loss should end up somewhere around 1.3 to 1.5.
-- The 5080 should finish the `stories` run in roughly an hour; the first steps are slower while `torch.compile` compiles the model.
+- The 5080 finishes the `stories` run in about 36 minutes (~200k tokens/s); the first steps are slower while `torch.compile` compiles the model.
 - Out of GPU memory: lower `--micro-batch` (e.g. 16 or 8). The gradient accumulation steps go up so each optimizer step still sees the same number of tokens.
+
+## Results and next steps
+
+First full run (`stories` preset, one pass over TinyStories = 3,616 steps, 474M tokens, 36 minutes on the RTX 5080):
+
+| step | train loss | val loss |
+|---|---|---|
+| 0 | 10.94 | 10.94 |
+| 500 | 1.97 | 2.00 |
+| 1000 | 1.65 | 1.68 |
+| 2000 | 1.45 | 1.48 |
+| 3616 | **1.33** | **1.37** |
+
+Both losses fell for the whole run and stayed within ~0.04 of each other, so the model is not overfitting. Val was still falling at the end, so it has more to learn: training longer is the most direct way to a lower loss.
+
+### Training longer
+
+Start a **fresh** run with more steps, e.g. two passes over the data (~75 minutes):
+
+```bash
+tmux new -s train "source .venv/bin/activate && python -u gpt2/train.py --data tinystories --preset stories --max-steps 7232 2>&1 | tee runs/train.log"
+```
+
+Do not extend a finished run with `--resume --max-steps 7232`. The learning rate schedule (warmup, then cosine decay) is stretched over `max_steps`, so the finished run is already at its minimum learning rate; resuming with a larger `max_steps` recomputes the schedule and jumps the learning rate back up mid-curve (from 1e-4 to about 5.8e-4), which knocks the loss up before it recovers. `--resume` is for continuing an interrupted run with the same settings.
+
+In a longer run, watch the gap between the two `loss/eval` lines: if val flattens while train keeps falling, the model has learned what it can from this data at this size.
+
+### Comparing with other models
+
+There is no single global metric or leaderboard this number fits into:
+
+- **Loss depends on the tokenizer and the validation set.** 1.37 is the average loss per GPT-2 token on TinyStories' validation split. It is directly comparable only with models measured the same way. A tokenizer with a smaller vocabulary has fewer choices per prediction and gives a lower per-token loss for the same quality of model.
+- **Bits per byte** (total loss divided by the number of bytes of text, in bits) removes the tokenizer from the comparison, and is the fair way to compare models with different tokenizers on the same text.
+- **The TinyStories paper** (Eldan & Li, 2023) did not rank models by loss; it had GPT-4 grade generated stories for grammar, consistency and creativity. Its reference models (e.g. `roneneldan/TinyStories-33M` on Hugging Face) can be evaluated on the same validation set for a head-to-head comparison.
+- **General LLM benchmarks** (WikiText perplexity, HellaSwag, MMLU) do not apply: a model that only knows children's stories scores near chance on them.
+
+### Why llama2.c reports lower TinyStories losses
+
+[llama2.c](https://github.com/karpathy/llama2.c) is not more efficient at training: its `train.py` is PyTorch code much like this one (`torch.compile`, bf16, gradient accumulation), and its `run.c` is a small pure-C program for running a trained model on the CPU, not for training. Its lower numbers come from:
+
+1. **Longer training**, on many more tokens than one pass. Probably the biggest factor.
+2. **A different tokenizer** (Llama 2's 32k vocabulary, or a 4k one trained on TinyStories), so its per-token losses are not directly comparable with these.
+3. **The Llama architecture**: RMSNorm instead of LayerNorm, rotary position embeddings (RoPE) instead of learned ones, SwiGLU feed-forward, no biases. Typically a little better per parameter than the GPT-2 design in `model.py`, but a modest difference.
+
+Next experiments, in rough order of effort: train longer; try the `gpt2` preset (124M parameters, about 3-4x slower per token); add a bits-per-byte evaluation to compare with other models; upgrade `model.py` to Llama-style blocks one piece at a time (RMSNorm, then RoPE, then SwiGLU) and compare each change in TensorBoard.
 
 ## Predicting the next words
 
