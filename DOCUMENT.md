@@ -226,3 +226,181 @@ context_vecs_best = SelfAttentionBest(d_in, d_out)(inputs)
 ```
 
 `context_vecs_best` matches `context_vecs` from `SelfAttention` (within `atol=1e-6`).
+
+## Causal attention
+
+For language modelling, the model predicts each token from the tokens before it, so a token must not see anything that comes after it. Causal (masked) attention sets every score above the diagonal to $-\infty$ before softmax:
+
+$$Z = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}} + M\right) V, \qquad M_{ij} = \begin{cases} 0 & j \le i \\ -\infty & j > i \end{cases}$$
+
+Because $e^{-\infty} = 0$, the masked positions get zero weight and each row still sums to 1. Zeroing the weights after softmax instead would leave rows that no longer sum to 1, so they would need normalizing again.
+
+The mask comes from `torch.triu(..., diagonal=1)`, which keeps only the entries strictly above the diagonal. For 4 tokens, `True` marks the future tokens each row must not see:
+
+```
+[[False,  True,  True,  True],
+ [False, False,  True,  True],
+ [False, False, False,  True],
+ [False, False, False, False]]
+```
+
+PyTorch implementation:
+
+```python
+class CausalAttention(nn.Module):
+    def __init__(self, d_in: int, d_out: int):
+        super().__init__()
+        self.W_query = nn.Parameter(torch.rand(d_in, d_out))
+        self.W_key = nn.Parameter(torch.rand(d_in, d_out))
+        self.W_value = nn.Parameter(torch.rand(d_in, d_out))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        attn_scores = torch.matmul(torch.matmul(x, self.W_query), torch.matmul(x, self.W_key).T)  # (T, T)
+        mask = torch.triu(torch.ones_like(attn_scores, dtype=torch.bool), diagonal=1)             # True for future tokens
+        attn_scores = attn_scores.masked_fill(mask, -torch.inf)
+        attn_weights = torch.softmax(attn_scores / self.W_key.shape[-1]**0.5, dim=-1)
+        return torch.matmul(attn_weights, torch.matmul(x, self.W_value))                         # (T, d_out)
+
+torch.manual_seed(123)  # same seed as SelfAttention, so the same three matrices
+causal_context_vecs = CausalAttention(d_in, d_out)(inputs)
+```
+
+The first row is just token 1's own value vector, since it can only attend to itself. The last row matches `SelfAttention`, since the last token sees every token. The whole result matches `F.scaled_dot_product_attention(queries, keys, values, is_causal=True)`.
+
+## Causal attention with a stored mask and dropout
+
+Three changes over `CausalAttention`:
+
+1. **Mask built once.** The boolean mask is made in `__init__` for the longest sequence the model accepts (`context_length`), and each call uses its top-left $(T, T)$ corner. `register_buffer` stores it on the module: it moves with `.to(device)` but is not trained. `persistent=False` keeps it out of `state_dict()`, since it can always be rebuilt from `context_length`. Inputs longer than `context_length` fail, because the mask is too small.
+2. **Dropout on the attention weights.** During training, `nn.Dropout(p)` sets a random fraction `p` of the weights to 0 and scales the rest by $1/(1-p)$, so the model doesn't depend too much on any one token. `model.eval()` turns it off.
+3. **Batched input.** Training feeds the model a batch of $B$ sequences at once. `keys.mT` swaps only the last two dimensions, while `.T` would reverse all three and break the matmul. `torch.matmul` applies the same weight matrices to every sequence, and the $(T, T)$ mask broadcasts over the batch, so each sequence is processed independently.
+
+The shape comments use these names:
+
+| Symbol | Meaning | In the example |
+|---|---|---|
+| $B$ | Batch size: how many sequences are processed at once | 2 (two copies of the sentence) |
+| $T$ | Tokens per sequence (`num_tokens` in the code), at most `context_length` | 6 |
+| $d_{in}$ | Size of each input token embedding | 3 |
+| $d_{out}$ | Size of each query, key, value and context vector | 2 |
+
+PyTorch implementation:
+
+```python
+class CausalAttentionBetter(nn.Module):
+    def __init__(self, d_in: int, d_out: int, context_length: int, dropout: float = 0.0):
+        super().__init__()
+        self.W_query = nn.Parameter(torch.rand(d_in, d_out))
+        self.W_key = nn.Parameter(torch.rand(d_in, d_out))
+        self.W_value = nn.Parameter(torch.rand(d_in, d_out))
+        self.dropout = nn.Dropout(dropout)
+        self.register_buffer(
+            "mask", torch.triu(torch.ones(context_length, context_length, dtype=torch.bool), diagonal=1), persistent=False
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        num_tokens = x.shape[-2]                 # x is (B, T, d_in), or (T, d_in) without a batch
+        queries = torch.matmul(x, self.W_query)  # (B, T, d_out)
+        keys = torch.matmul(x, self.W_key)       # (B, T, d_out)
+        values = torch.matmul(x, self.W_value)   # (B, T, d_out)
+
+        attn_scores = torch.matmul(queries, keys.mT)                                            # (B, T, T)
+        attn_scores = attn_scores.masked_fill(self.mask[:num_tokens, :num_tokens], -torch.inf)  # (T, T) mask broadcasts over B
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        return torch.matmul(attn_weights, values)                                               # (B, T, d_out)
+
+torch.manual_seed(123)
+causal_attn_better = CausalAttentionBetter(d_in, d_out, context_length=inputs.shape[0], dropout=0.5)
+causal_attn_better.eval()  # dropout off
+
+batch = torch.stack([inputs, inputs])                # (2, 6, 3)
+batch_context_vecs = causal_attn_better(batch)       # (2, 6, 2)
+```
+
+In `eval()` mode the output matches `CausalAttention`, and each sequence in the batch matches the unbatched result.
+
+## Multi-head attention
+
+A single attention head learns one way of relating tokens to each other. Multi-head attention runs several heads side by side, each with its own $W_q$, $W_k$ and $W_v$, and concatenates their context vectors:
+
+$$Z = \text{concat}(Z_1, Z_2, \dots, Z_h)$$
+
+Each head starts from different random weights, which is what lets the heads learn different patterns. Nothing forces them apart, though, and trained models often have some partly redundant heads.
+
+The simplest version is a wrapper that holds `num_heads` copies of `CausalAttentionBetter`. `nn.ModuleList` registers each head as a submodule, so their weights are trained, moved by `.to(device)` and switched by `.eval()` together.
+
+PyTorch implementation:
+
+```python
+class MultiHeadAttentionWrapper(nn.Module):
+    def __init__(self, d_in: int, d_out: int, context_length: int, num_heads: int, dropout: float = 0.0):
+        super().__init__()
+        self.heads = nn.ModuleList(
+            [CausalAttentionBetter(d_in, d_out, context_length, dropout) for _ in range(num_heads)]
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.cat([head(x) for head in self.heads], dim=-1)  # (B, T, num_heads * d_out)
+
+torch.manual_seed(123)
+mha_context_vecs = MultiHeadAttentionWrapper(d_in, d_out, context_length=6, num_heads=2)(batch)  # (2, 6, 4)
+```
+
+Each head outputs `d_out` values per token, so the output is $(B, T, \text{num\_heads} \cdot d_{out})$: with 2 heads and $d_{out} = 2$, every token gets a 4-dimensional context vector. The first 2 values come from head 1 and the last 2 from head 2. It works for any batch size and any number of heads.
+
+The heads run one after another and each does its own three projections, which is easy to read but slow. A combined `MultiHeadAttention` class does all the heads' projections in one matmul and splits them afterwards.
+
+## Comparison with `nn.MultiheadAttention`
+
+PyTorch ships a ready-made layer, `nn.MultiheadAttention`. It does the Q/K/V projections (stored as one `in_proj_weight`), head splitting, masking, dropout and an output projection `out_proj`. `F.scaled_dot_product_attention` is a lower-level function that does only the $\text{softmax}(QK^T/\sqrt{d_k})V$ step; `nn.MultiheadAttention` uses it internally.
+
+| | `MultiHeadAttentionWrapper` | `nn.MultiheadAttention` |
+|---|---|---|
+| Output size | `num_heads * d_out` | `embed_dim` (same as the input), split as `num_heads * head_dim` |
+| Projections | one matmul per head per Q/K/V | one matmul for all of Q, K, V |
+| Causal mask | stored buffer | passed in on each call as `attn_mask` |
+| Output projection | none | `out_proj` |
+| Biases | none | on by default (`bias=False` to remove) |
+
+**Size requirement.** `d_model` is the usual name for the embedding size of each token (PyTorch calls it `embed_dim`). `nn.MultiheadAttention` requires the output size to equal the input size, and $d_{model} = \text{num\_heads} \times \text{head\_dim}$. The sentence `inputs` have $d_{in} = 3$, which can't be split across 2 heads, so the comparison uses a random input with $d_{model} = 4$ = 2 heads × `head_dim` 2:
+
+```
+x:            (2, 6, 4)    2 sequences × 6 tokens × d_model 4
+head 1 out:   (2, 6, 2)  ┐
+head 2 out:   (2, 6, 2)  ┘ concatenated along the last dimension
+output:       (2, 6, 4)    = num_heads 2 × head_dim 2
+```
+
+Output size = input size is needed because of residual connections: a Transformer block computes `x + attention(x)`, which only works if both have the same shape. The inner size `num_heads * head_dim` can differ from `d_model` in principle (`out_proj` maps it back), but `nn.MultiheadAttention` doesn't allow it.
+
+**Gotchas:**
+
+- Without `batch_first=True` it expects `(T, B, d)`, not `(B, T, d)`.
+- It stores no mask, because it is also used for non-causal attention. `nn.Transformer.generate_square_subsequent_mask(T)` builds the causal mask as a 0 / $-\infty$ matrix. `is_causal=True` alone does **not** mask; it only tells PyTorch the mask you pass is causal.
+- It stores weights as `(out, in)`, the transpose of ours.
+- It returns `(output, attn_weights)`. `need_weights=False` skips the weights and lets it use the fast fused kernel.
+- `builtin(x, x, x)` passes the same input as query, key and value, which is self-attention. Different inputs give cross-attention.
+
+PyTorch implementation, copying the wrapper's weights into the built-in layer so the outputs are comparable:
+
+```python
+d_model, num_heads = 4, 2
+head_dim = d_model // num_heads
+torch.manual_seed(123)
+x = torch.rand(2, 6, d_model)     # (B, T, d_model)
+T = x.shape[1]
+
+ours = MultiHeadAttentionWrapper(d_model, head_dim, context_length=T, num_heads=num_heads)
+W_q, W_k, W_v = (torch.cat([getattr(head, name) for head in ours.heads], dim=-1) for name in ("W_query", "W_key", "W_value"))
+
+builtin = nn.MultiheadAttention(d_model, num_heads, bias=False, batch_first=True)
+with torch.no_grad():  # in-place changes to trainable parameters need gradient tracking off
+    builtin.in_proj_weight.copy_(torch.cat([W_q.T, W_k.T, W_v.T]))  # stacked Q, K, V as (out, in)
+    builtin.out_proj.weight.copy_(torch.eye(d_model))               # identity = no-op, since ours has no output projection
+
+mask = nn.Transformer.generate_square_subsequent_mask(T)
+builtin_out, _ = builtin(x, x, x, attn_mask=mask, is_causal=True, need_weights=False)  # (2, 6, 4)
+```
+
+`builtin_out` matches `ours(x)` (within `atol=1e-6`).
