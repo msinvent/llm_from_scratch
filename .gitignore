@@ -32,3 +32,6 @@ models/
 
 # OS
 .DS_Store
+
+# Training runs (checkpoints, logs)
+runs/
