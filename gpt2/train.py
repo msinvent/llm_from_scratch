@@ -144,6 +144,8 @@ def main():
             json.dump({"args": vars(args), "preset": preset, "micro_batch": micro_batch, "lr": lr,
                        "max_steps": max_steps, "n_train_tokens": n_train}, f, indent=2)
     tb = SummaryWriter(out_dir)  # writes to disk in a background thread
+    # Eval losses go to sub-runs under one tag, so TensorBoard draws train and val on one chart in two colors
+    tb_eval = {split: SummaryWriter(os.path.join(out_dir, f"eval_{split}")) for split in ("train", "val")}
 
     @torch.no_grad()
     def estimate_loss() -> dict[str, float]:
@@ -164,8 +166,8 @@ def main():
         print(f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         with open(log_path, "a") as f:
             f.write(f"{step},,{losses['train']:.4f},{losses['val']:.4f},\n")
-        tb.add_scalar("loss/val", losses["val"], step)
-        tb.add_scalar("loss/train_eval", losses["train"], step)
+        for split, writer in tb_eval.items():
+            writer.add_scalar("loss/eval", losses[split], step)
         prompt = torch.tensor([enc.encode(args.prompt)], device=device)
         raw_model.eval()
         sample = raw_model.generate(prompt, max_new_tokens=100, n_vocab=enc.n_vocab)
@@ -212,7 +214,8 @@ def main():
             t0 = time.time()
 
     evaluate_and_save()
-    tb.close()
+    for writer in (tb, *tb_eval.values()):
+        writer.close()
 
 
 if __name__ == "__main__":

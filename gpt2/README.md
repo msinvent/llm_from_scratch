@@ -73,6 +73,7 @@ runs/tinystories-stories-20261026-020147/
   log.csv       # step, lr, train_loss, val_loss, tokens_per_sec
   ckpt.pt       # model and optimizer, saved at every evaluation
   events.out.tfevents.*   # the same numbers for TensorBoard
+  eval_train/, eval_val/  # the eval losses for TensorBoard, one sub-run each so they get their own colors
 ```
 
 `log.csv` has two kinds of rows. Every 10 steps (`--log-interval`): the loss of that step's batch, the learning rate and the speed, with `val_loss` empty. Every 250 steps (`--eval-interval`): train and val loss each averaged over 20 batches (`--eval-batches`), with `lr` empty.
@@ -87,13 +88,15 @@ tensorboard --logdir runs        # then open http://localhost:6006 in your Windo
 | Chart | What it is |
 |---|---|
 | `loss/train_step` | loss of the training batch, every 10 steps (noisy; use the Smoothing slider) |
-| `loss/train_eval`, `loss/val` | train and val loss averaged over 20 batches, every 250 steps |
+| `loss/eval` | train and val loss averaged over 20 batches, every 250 steps, on one chart: the `<run>/eval_train` and `<run>/eval_val` lines |
 | `lr` | learning rate: linear warmup, then cosine decay |
 | `tokens_per_sec` | training speed |
 
+The Smoothing slider (top left, default 0.6) draws the smoothed curve in full color and the raw values as a faint line behind it. Set it to 0 for `loss/eval`, which has only a few points.
+
 The charts update live, 10 to 60 seconds behind the terminal: `train.py` writes to disk every ~40 steps, TensorBoard checks for new data every 5 seconds, and the page refreshes every 30 seconds (click ⟳ at the top right to refresh now). Val points only appear every 250 steps, when an evaluation runs.
 
-Each run folder shows up as its own run, including new ones started while TensorBoard is open; tick runs on and off in the left panel to compare them.
+Each run folder shows up as its own run (plus its `eval_train` and `eval_val` sub-runs), including new ones started while TensorBoard is open; tick runs on and off in the left panel to compare them.
 
 To look at only some runs, type a regular expression in the **Filter runs** box in the left panel, e.g. `tinystories-stories-.*` for all TinyStories runs or `verdict-tiny-20261026-.*` for the verdict runs of one day. Runs started later that match the filter show up too.
 
