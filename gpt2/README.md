@@ -106,7 +106,20 @@ To look at only some runs, type a regular expression in the **Filter runs** box 
 tensorboard --logdir_spec $(ls -d runs/tinystories-stories-* | paste -sd, -)
 ```
 
-The pattern is expanded once, at startup, so a matching run started later needs a TensorBoard restart. `--logdir_spec` is marked experimental, so prefer the filter box. A val loss that flattens or rises while the train loss keeps falling means the model is overfitting.
+The pattern is expanded once, at startup, so a matching run started later needs a TensorBoard restart. `--logdir_spec` is marked experimental, so prefer the filter box.
+
+### Viewing runs on another machine
+
+Each run's TensorBoard logs, `log.csv` and `config.json` are committed to git (well under 1 MB per run); the checkpoints (`ckpt.pt`, ~600 MB) and `runs/train.log` are not. After a run, commit and push its folder, then on the other machine (e.g. a Mac):
+
+```bash
+git pull
+source .venv/bin/activate          # or any Python environment
+pip install tensorboard
+tensorboard --logdir runs          # open http://localhost:6006
+```
+
+To use a checkpoint elsewhere (e.g. for `sample.py`), copy it directly, e.g. `scp runs/<run>/ckpt.pt mac:llm_from_scratch/runs/<run>/`; it is too large for git. A val loss that flattens or rises while the train loss keeps falling means the model is overfitting.
 
 To test a change, run the same command with one setting changed (e.g. `--lr 5e-4`) and compare the two runs; `config.json` records what differed.
 

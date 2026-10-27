@@ -1,0 +1,32 @@
+{
+  "args": {
+    "data": "tinystories",
+    "preset": "stories",
+    "micro_batch": null,
+    "max_steps": null,
+    "lr": null,
+    "dropout": 0.0,
+    "weight_decay": 0.1,
+    "eval_interval": 250,
+    "eval_batches": 20,
+    "log_interval": 10,
+    "prompt": "Once upon a time",
+    "out_dir": null,
+    "resume": false,
+    "no_compile": false,
+    "seed": 1337
+  },
+  "preset": {
+    "n_layers": 8,
+    "n_heads": 8,
+    "d_model": 512,
+    "context_length": 512,
+    "batch_tokens": 131072,
+    "micro_batch": 32,
+    "lr": 0.001
+  },
+  "micro_batch": 32,
+  "lr": 0.001,
+  "max_steps": 3616,
+  "n_train_tokens": 473992236
+}

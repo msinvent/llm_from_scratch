@@ -33,5 +33,10 @@ models/
 # OS
 .DS_Store
 
-# Training runs (checkpoints, logs)
-runs/
+# Training runs: keep the small logs (TensorBoard events, log.csv, config.json) so runs can be
+# viewed on another machine; checkpoints (*.pt, ignored above) and console logs stay local
+runs/**
+!runs/**/
+!runs/**/events.out.tfevents.*
+!runs/**/log.csv
+!runs/**/config.json
